@@ -1,0 +1,217 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Elasticsearch cluster deployment",
+
+  "Mappings" : {
+    "CoreOSRegionMap" : {
+      "us-east-1" : { "AMI" : "ami-7a627510" },
+      "us-west-2" : { "AMI" : "ami-4f7f8a2f" },
+      "us-west-1" : { "AMI" : "ami-d8770bb8" },
+      "eu-west-1" : { "AMI" : "ami-3b941448" }
+    }
+  },
+  "Parameters": {
+    "AdminSecurityGroupId": {
+      "Description": "The security group id for AdminSecurityGroup",
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    },
+    "AppSubnetA": {
+      "Description": "The subnet id for AppSubnetA",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "AppSubnetB": {
+      "Description": "The subnet id for AppSubnetB",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "AppSubnetC": {
+      "Description": "The subnet id for AppSubnetC",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "CoreOSDiscoveryURL": {
+      "Description": "An unique etcd cluster discovery URL. Grab a new token from https://discovery.etcd.io/new?size=<your cluster size>",
+      "Type": "String"
+    },
+    "EnvironmentName" : {
+      "Description" : "The name of the environment.",
+      "Type" : "String"
+    },
+    "ElasticsearchClusterSize": {
+      "Default": "2",
+      "MinValue": "2",
+      "MaxValue": "2",
+      "Description": "Number of nodes in cluster (2-5).",
+      "Type": "Number"
+    },
+    "FluentdMasterIp" : {
+      "Description" : "IP address of the Fluentd aggregator master",
+      "Type" :  "String"
+    },
+    "FluentdSlaveIp" : {
+      "Description" : "IP address of the Fluentd aggregator slave",
+      "Type" :  "String"
+    },
+    "KeyPair" : {
+      "Description" : "The name of an EC2 Key Pair to allow SSH access to the instance.",
+      "Type" : "String"
+    },
+    "S3LogPath" : {
+      "Description" : "The location to copy archived logs to in S3 for this environment",
+      "Type" : "String"
+    },
+    "VpcCidrBlock": {
+      "Description" : "First three octets to use for the CIDR address range of this Environments VPC",
+      "Type": "String",
+      "Default" : "10.211.10",
+      "MinLength": "5",
+      "MaxLength": "11",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})",
+      "ConstraintDescription": "must be dot separated prefix in the form x.y.z"
+    },
+    "VpcId" : {
+      "Description" : "The VPC id of the VPC to use for this environment",
+      "Type" : "AWS::EC2::VPC::Id"
+    }
+  },
+
+  "Resources" : {
+    "ElasticsearchSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Elasticsearch SecurityGroup",
+        "VpcId" : { "Ref" : "VpcId" },
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroupId"}},
+          {"IpProtocol": "tcp", "FromPort": "514", "ToPort": "514", "CidrIp": "10.0.10.0/24"},
+          {"IpProtocol": "udp", "FromPort": "514", "ToPort": "514", "CidrIp": "10.0.10.0/24"},
+          {"IpProtocol": "tcp", "FromPort": "5601", "ToPort": "5601", "CidrIp": "10.0.10.0/24"},
+          {"IpProtocol": "tcp", "FromPort": "80", "ToPort": "80", "CidrIp": "64.211.224.254/32"},
+          {"IpProtocol": "tcp", "FromPort": "9200", "ToPort": "9200", "CidrIp": "10.0.10.0/24"},
+          {"IpProtocol": "tcp", "FromPort": "9200", "ToPort": "9200", "CidrIp": "64.211.224.254/32"},
+          {"IpProtocol": "icmp", "FromPort": "-1", "ToPort": "-1", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroupId"}}
+        ],
+        "Tags" : [
+          {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}},
+          { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"elasticsearch-allow"]]}}
+        ]
+      }
+    },
+    "ElasticsearchAutoScale": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "VPCZoneIdentifier": [{"Ref": "AppSubnetA"}, {"Ref": "AppSubnetB"}, {"Ref" : "AppSubnetC"}],
+        "LaunchConfigurationName": {"Ref": "ElasticsearchLaunchConfig"},
+        "MinSize": "2",
+        "MaxSize": "2",
+        "DesiredCapacity": {"Ref": "ElasticsearchClusterSize"},
+        "Tags": [
+          {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}, "PropagateAtLaunch": "true"},
+          {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"elasticsearch"]]}, "PropagateAtLaunch": "true"}
+        ]
+      }
+    },
+    "ElasticsearchLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "BlockDeviceMappings": [{
+          "DeviceName": "/dev/xvda",
+          "Ebs" : {"VolumeSize": "100"}}],
+        "ImageId" : { "Fn::FindInMap" : [ "CoreOSRegionMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "InstanceType": {"Ref": "ElasticsearchInstanceType"},
+        "KeyName": {"Ref": "KeyPair"},
+        "SecurityGroups": [{"Ref": "ElasticsearchSecurityGroup"}],
+        "UserData" : { "Fn::Base64":
+        { "Fn::Join": [ "", [
+          "#cloud-config\n\n",
+          "coreos:\n",
+          "  update:\n",
+          "    reboot-strategy: off\n",
+          "  units:\n",
+          "    - name: etcd2.service\n",
+          "      mask: true\n",
+          "    - name: fleet.service\n",
+          "      command: start\n",
+          "    - name: etcd2.service\n",
+          "      mask: true\n",
+          "    - name: fleet.service\n",
+          "      command: start\n",
+          "write_files:\n",
+          "  - path: '/etc/td-agent/td-agent.conf'\n",
+          "    permissions: '0644'\n",
+          "    content: |\n",
+          "      <source>\n",
+          "        @type syslog\n",
+          "        format none\n",
+          "        port 514\n",
+          "        tag syslog\n",
+          "      </source>\n\n",
+          "      <match **>\n",
+          "        @type copy\n",
+          "       <store>\n",
+          "         @type 'aws-elasticsearch-service'\n",
+          "         logstash_format true\n",
+          "         type_name 'syslog_log'\n",
+          "         include_tag_key true\n",
+          "         tag_key '@syslog'\n",
+          "         flush_interval '5s'\n",
+          "        <endpoint>\n",
+          "          url 'https://search-dev-xpromo-pegi6mgqcxivoiy2qrdcl6rlru.us-east-1.es.amazonaws.com'\n",
+          "          region 'us-east-1'\n",
+          "          access_key_id 'AKIAJ27NJJ5PBICDN52Q'\n",
+          "          secret_access_key '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'\n",
+          "        </endpoint>\n",
+          "       </store>\n",
+          "       <store>\n",
+          "         @type s3\n",
+          "         aws_key_id 'AKIAJ27NJJ5PBICDN52Q'\n",
+          "         aws_sec_key 'gbF/rwnM/du9gT+9Fo7RMQNc+T+I4nipSP6KQRFI'\n",
+          "         s3_bucket xp-logging\n",
+          "         s3_region us-east-1\n",
+          "         s3_object_key_format %{path}%{time_slice}_%{index}.%{file_extension}\n",
+          "         path qa/\n",
+          "         buffer_path /var/log/td-agent/s3\n",
+          "         store_as json\n",
+          "         time_slice_format %Y%m%d-%H\n",
+          "         time_slice_wait 10m\n",
+          "         utc\n",
+          "       </store>\n",
+          "      </match>\n",
+          "  - path: '/etc/dd-agent/conf.d/docker_daemon.yaml'\n",
+          "    permissions: '0644'\n",
+          "    content: |  \n",
+          "      init_config:\n\n",
+          "      instances:\n",
+          "          - url: 'unix://var/run/docker.sock'\n",
+          "            new_tag_names: true\n",
+          "  - path: '/etc/dd-agent/conf.d/disk.yaml.default'\n",
+          "    permissions: '0644'\n",
+          "    content: |\n",
+          "      init_config:\n\n",
+          "      instances:\n",
+          "         - use_mount: no\n",
+          "  - path: '/etc/dd-agent/conf.d/agent_metrics.yaml.default'\n",
+          "    permissions: '0644'\n",
+          "    content: |\n",
+          "      init_config:\n",
+          "          process_metrics:\n",
+          "              - name: get_memory_info\n",
+          "                type: gauge\n",
+          "                active: yes\n",
+          "              - name: get_io_counters\n",
+          "                type: rate\n",
+          "                active: yes\n",
+          "              - name: get_num_threads\n",
+          "                type: gauge\n",
+          "                active: yes\n",
+          "              - name: get_connections\n",
+          "                type: gauge\n",
+          "                active: no\n\n",
+          "      instances:\n",
+          "          [{}]\n"
+        ] ]
+        }
+        }
+      }
+    }
+  }
+}

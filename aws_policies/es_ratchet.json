@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::playstation:root"
+      },
+      "Action": "es:*",
+      "Resource": "arn:aws:es:us-east-1:playstation:domain/ratchet-devnet/*"
+    },
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "*"
+      },
+      "Action": "es:*",
+      "Resource": "arn:aws:es:us-east-1:playstation:domain/ratchet-devnet/*",
+      "Condition": {
+        "IpAddress": {
+          "aws:SourceIp": [
+            "64.211.224.254/32"
+          ]
+        }
+      }
+    }
+  ]
+}

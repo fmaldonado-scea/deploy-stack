@@ -1,0 +1,143 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Etcd cluster for DevNet environment",
+  "Mappings" : {
+      "CoreOSRegionMap" : {
+          "us-east-1" : { "AMI" : "ami-39302b2e" },
+          "us-west-2" : { "AMI" : "ami-c177c7a1" },
+          "us-west-1" : { "AMI" : " ami-4f6f3f2f" },
+          "eu-west-1" : { "AMI" : "ami-70694703" }
+      }
+  },
+  "Parameters": {
+    "EtcdClusterSize": {
+      "Default": "3",
+      "MinValue": "3",
+      "MaxValue": "5",
+      "Description": "Number of nodes in cluster (3-12).",
+      "Type": "Number"
+    },
+    "EtcdInstanceType" : {
+       "Description" : "EC2 HVM instance type for the Etcd cluster instances",
+       "Type":  "String",
+       "Default" : "m3.medium",
+       "ConstraintDescription" : "Must be a valid EC2 HVM instance type."
+    },
+    "EnvironmentName" : {
+       "Description" : "The name of the DevNet environment",
+       "Type" :  "String"  
+    }, 
+    "KeyPair" : {
+      "Description" : "The name of an EC2 Key Pair to allow SSH access to the instance.",
+      "Type":"AWS::EC2::KeyPair::KeyName"
+    }
+  },
+  "Resources": {
+    "ETCDRoute53": {
+      "Type": "AWS::Route53::HostedZone",
+      "Properties": {
+        "Name": "example.com",
+        "VPCs": [
+          {"VPCId": {"Fn::ImportValue" : {"Fn::Sub" : "service-VpcId"}},
+          "VPCRegion": {"Ref" : "AWS::Region"}
+          }
+        ],
+        "HostedZoneTags" : [
+          {"Key": "Environment", "Value": {"Ref": "EnvironmentName"}},
+          {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{"Ref": "EnvironmentName"},"etcd-dns"]]}}
+        ]
+      }
+    },
+    "ETCDDNSRecord": {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "Type" : "SRV",
+        "HostedZoneId" : { "Ref" : "ETCDRoute53" },
+        "Name" : "*.example.com",
+        "ResourceRecords" : [ "10 5 2379 _etcd-client._tcp.example.com", "10 5 2380 _etcd-server._tcp.example.com"]
+      }
+    },
+    "ETCDSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Etcd SecurityGroup",
+        "VpcId" : {"Fn::ImportValue" : {"Fn::Sub" : "service-VpcId"}},
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Fn::ImportValue" : {"Fn::Sub" : "service-AdminSecurityGroup"}}},
+          {"IpProtocol": "tcp", "FromPort": "2379", "ToPort": "2379", "CidrIp": {"Fn::ImportValue" : {"Fn::Sub" : "service-VpcCidrRange"}}},
+          {"IpProtocol": "icmp", "FromPort": "-1", "ToPort": "-1", "SourceSecurityGroupId": {"Fn::ImportValue" : {"Fn::Sub" : "service-AdminSecurityGroup"}}}
+        ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{"Ref": "EnvironmentName"},"etcd-allow"]]}},
+          { "Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}}
+        ]
+      }
+    },
+    "ETCDIngress2379": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {"Ref": "ETCDSecurityGroup"}, "IpProtocol": "tcp", "FromPort": "2379", "ToPort": "2379", "SourceSecurityGroupId": {
+          "Fn::GetAtt" : [ "ETCDSecurityGroup", "GroupId" ]
+        }
+      }
+    },
+    "ETCDIngress2380": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {"Ref": "ETCDSecurityGroup"}, "IpProtocol": "tcp", "FromPort": "2380", "ToPort": "2380", "SourceSecurityGroupId": {
+          "Fn::GetAtt" : [ "ETCDSecurityGroup", "GroupId" ]
+        }
+      }
+    },
+    "ETCDAutoScale": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "VPCZoneIdentifier": [{"Fn::ImportValue" : {"Fn::Sub" : "service-AppSubnetA"}}, {"Fn::ImportValue" : {"Fn::Sub" : "service-AppSubnetB"}}, {"Fn::ImportValue" : {"Fn::Sub" : "service-AppSubnetC"}}],
+        "LaunchConfigurationName": {"Ref": "ETCDLaunchConfig"},
+        "MinSize": "3",
+        "MaxSize": "5",
+        "DesiredCapacity": {"Ref": "EtcdClusterSize"},
+        "Tags": [
+            {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}, "PropagateAtLaunch": "true"},
+            {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{"Ref": "EnvironmentName"},"etcd"]]}, "PropagateAtLaunch": "true"}
+        ]
+      }
+    },
+    "ETCDLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "BlockDeviceMappings": [{
+            "DeviceName": "/dev/xvda",
+            "Ebs" : {"VolumeSize": "100"}}],
+        "ImageId" : { "Fn::FindInMap" : [ "CoreOSRegionMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "InstanceType": {"Ref": "EtcdInstanceType"},
+        "KeyName": {"Ref": "KeyPair"},
+        "SecurityGroups": [{"Ref": "ETCDSecurityGroup"}],
+        "UserData" : { "Fn::Base64":
+          { "Fn::Join": [ "", [
+            "#cloud-config\n\n",
+            "coreos:\n",
+            "  etcd2:\n",
+            "    discovery: srv example.com\n",
+            "    advertise-client-urls: http://$private_ipv4:2379\n",
+            "    initial-advertise-peer-urls: http://$private_ipv4:2380\n",
+            "    listen-client-urls: http://0.0.0.0:2379,http://0.0.0.0:4001\n",
+            "    listen-peer-urls: http://$private_ipv4:2380\n",
+            "  units:\n",
+            "    - name: etcd2.service\n",
+            "      command: start\n",
+            "    - name: fleet.service\n",
+            "      command: start\n",
+            "write_files:\n",
+            "  - path: '/etc/environment'\n",
+            "    permissions : '0644'\n",
+            "    content: |  \n",
+            "       COREOS_PRIVATE_IPV4=$private_ipv4\n",
+            "       COREOS_PUBLIC_IPV4=$public_ipv4\n"
+            ] ]
+          }
+        }
+      }
+    }
+  }
+}

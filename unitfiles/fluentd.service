@@ -1,0 +1,19 @@
+[Unit]
+Description=Fluentd Aggregator
+After=docker.service
+Requires=docker.service
+[Service]
+TimeoutStartSec=0
+EnvironmentFile=/etc/environment
+KillMode=none
+ExecStartPre=-/usr/bin/docker kill fluentd
+ExecStartPre=-/usr/bin/docker rm fluentd
+ExecStartPre=/usr/bin/bash -c '/usr/bin/docker login -e=. -u=xp-docker -p= :443'
+ExecStartPre=/usr/bin/docker pull :443/fluentd:
+ExecStart=/usr/bin/bash -c '/usr/bin/docker run --name fluentd -p 514:514/udp -p 24224:24224
+       -v /etc/td-agent:/etc/td-agent
+       -v /var/log/fluentd:/var/log/td-agent/
+       -e FLUENTD_CONF=td-agent.conf \\
+       :443/fluentd:'
+ExecStop=/usr/bin/docker stop fluentd
+Restart=always

@@ -1,0 +1,276 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Fluentd cluster for DevNet environment",
+
+  "Mappings" : {
+    "CoreOSRegionMap" : {
+      "us-east-1" : { "AMI" : "ami-7a627510" },
+      "us-west-2" : { "AMI" : "ami-4f7f8a2f" },
+      "us-west-1" : { "AMI" : "ami-d8770bb8" },
+      "eu-west-1" : { "AMI" : "ami-3b941448" }
+    }
+  },
+  "Parameters": {
+    "AwsEsAccessKey" : {
+       "Description" : "The access key id used for Amazon ElasticSearch",
+       "Default" : "AKIAJAJHMFT6KUDX62UQ",
+       "Type" :  "String"  
+    },
+    "AwsEsRegion" : {
+       "Description" : "The region of the AWS S3 bucket used for realtime logs",
+       "Default" : "us-east-1",
+       "Type" :  "String" 
+    },
+    "AwsEsSecretKey" : {
+       "Description" : "The secret key id used for Amazon ElasticSearch",
+       "Default" : "/7dfcoASq99ajfScKI/azFFTA2GfoxgqBYhZGBXF",
+       "Type" :  "String"  
+    },
+    "AwsEsUrl" : {
+       "Description" : "The URL of Amazon ElasticSearch",
+       "Default" : "https://search-dev-devnet-kpr7rkybjm7gukc4y5jut7qkla.us-east-1.es.amazonaws.com",
+       "Type" :  "String"  
+    },
+    "AwsS3Bucket" : {
+       "Description" : "The name of the AWS S3 bucket used for archived logs",
+       "Default" : "devnet-devops",
+       "Type" :  "String"  
+    },
+    "AwsS3DirPath" : {
+       "Description" : "The directory path in AWS S3 for archived logs",
+       "Default" : "dev",
+       "Type" :  "String"  
+    },
+    "AwsS3Region" : {
+       "Description" : "The region of the AWS S3 bucket used for archived logs",
+       "Default" : "us-east-1",
+       "Type" :  "String"  
+    },
+    "EnvironmentName" : {
+       "Description" : "The name of the DevNet environment",
+       "Type" :  "String"  
+    },
+    "FluentdClusterSize": {
+      "Default": "2",
+      "MinValue": "2",
+      "MaxValue": "2",
+      "Description": "Number of nodes in cluster (2-5).",
+      "Type": "Number"
+    },
+    "FluentdInstanceType" : {
+      "Description" : "EC2 HVM instance type for Fluentd",
+      "Type":  "String",
+      "Default" : "m3.medium",
+      "ConstraintDescription" : "Must be a valid EC2 HVM instance type."
+    },
+    "FluentdMasterIp" : {
+      "Description" : "IP address of the Fluentd aggregator master",
+      "Type" :  "String"
+    },
+    "FluentdSlaveIp" : {
+      "Description" : "IP address of the Fluentd aggregator slave",
+      "Type" :  "String"
+    },
+    "KeyPair" : {
+      "Description" : "The name of an EC2 Key Pair to allow SSH access to the instance.",
+      "Type":"AWS::EC2::KeyPair::KeyName"
+    }
+  },
+
+  "Resources" : {
+    "FluentdSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Fluentd SecurityGroup",
+        "VpcId" : {"Fn::ImportValue" : {"Fn::Sub" : "devops-VpcId"}},
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp", "FromPort": "514", "ToPort": "514", "CidrIp": {"Fn::ImportValue" : {"Fn::Sub" : "devops-VpcCidrRange"}}},
+          {"IpProtocol": "udp", "FromPort": "514", "ToPort": "514", "CidrIp": {"Fn::ImportValue" : {"Fn::Sub" : "devops-VpcCidrRange"}}},
+          {"IpProtocol": "tcp", "FromPort": "24224", "ToPort": "24224", "CidrIp": {"Fn::ImportValue" : {"Fn::Sub" : "devops-VpcCidrRange"}}},
+          {"IpProtocol": "udp", "FromPort": "24224", "ToPort": "24224", "CidrIp": {"Fn::ImportValue" : {"Fn::Sub" : "devops-VpcCidrRange"}}},
+          {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Fn::ImportValue" : {"Fn::Sub" : "devops-AdminSecurityGroup"}}}
+        ],
+        "Tags" : [
+          { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{"Ref" : "EnvironmentName"},"fluentd-allow"]]}},
+          { "Key" : "Environment", "Value" : { "Ref": "EnvironmentName"}}
+        ]
+      }
+    },
+    "FluentdAutoScale": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "VPCZoneIdentifier": [{"Fn::ImportValue" : {"Fn::Sub" : "devops-AppSubnetA"}}, {"Fn::ImportValue" : {"Fn::Sub" : "devops-AppSubnetB"}}, {"Fn::ImportValue" : {"Fn::Sub" : "devops-AppSubnetC"}}],
+        "LaunchConfigurationName": {"Ref": "FluentdLaunchConfig"},
+        "MinSize": "2",
+        "MaxSize": "2",
+        "DesiredCapacity": {"Ref": "FluentdClusterSize"},
+        "Tags": [
+          {"Key" : "Environment", "Value" : {"Ref" : "EnvironmentName"}, "PropagateAtLaunch": "true"},
+          {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"fluentd"]]}, "PropagateAtLaunch": "true"}
+        ]
+      }
+    },
+    "FluentdLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "BlockDeviceMappings": [{
+          "DeviceName": "/dev/xvda",
+          "Ebs" : {"VolumeSize": "100"}}],
+        "ImageId" : { "Fn::FindInMap" : [ "CoreOSRegionMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "InstanceType": {"Ref": "FluentdInstanceType"},
+        "KeyName": {"Ref": "KeyPair"},
+        "SecurityGroups": [{"Ref": "FluentdSecurityGroup"}],
+        "UserData" : { "Fn::Base64":
+        { "Fn::Join": [ "", [
+          "#cloud-config\n\n",
+          "coreos:\n",
+          "  update:\n",
+          "    reboot-strategy: off\n",
+          "  units:\n",
+          "    - name: etcd2.service\n",
+          "      mask: true\n",
+          "    - name: fleet.service\n",
+          "      command: start\n",
+          "    - name: etcd2.service\n",
+          "      mask: true\n",
+          "    - name: fleet.service\n",
+          "      command: start\n",
+          "write_files:\n",
+          "  - path: '/etc/td-agent/td-agent.conf'\n",
+          "    permissions: '0644'\n",
+          "    content: |\n",
+          "      <source>\n",
+          "        @type syslog\n",
+          "        format none\n",
+          "        port 514\n",
+          "        tag syslog\n",
+          "      </source>\n\n",
+          "      <match **>\n",
+          "        @type copy\n",
+          "       <store>\n",
+          "         @type 'aws-elasticsearch-service'\n",
+          "         logstash_format true\n",
+          "         type_name 'syslog_log'\n",
+          "         include_tag_key true\n",
+          "         tag_key '@syslog'\n",
+          "         flush_interval '5s'\n",
+          "        <endpoint>\n",
+          "          url ''\n",
+          "          region '",{"Ref" : "AwsEsRegion"},"'\n",
+          "          access_key_id '",{"Ref" : "AwsEsAccessKey"},"'\n",
+          "          secret_access_key '",{"Ref" : "AwsEsSecretKey"},"'\n",
+          "        </endpoint>\n",
+          "       </store>\n",
+          "       <store>\n",
+          "         @type s3\n",
+          "         aws_key_id '",{"Ref" : "AwsEsAccessKey"},"'\n",
+          "         aws_sec_key '",{"Ref" : "AwsEsSecretKey"},"'\n",
+          "         s3_bucket '",{"Ref" : "AwsS3Bucket"},"'\n",
+          "         s3_region '",{"Ref" : "AwsEsRegion"},"'\n",
+          "         s3_object_key_format %{path}%{time_slice}_%{index}.%{file_extension}\n",
+          "         path '",{"Ref" : "AwsS3DirPath"},"'\n",
+          "         buffer_path /var/log/td-agent/s3\n",
+          "         store_as json\n",
+          "         time_slice_format %Y%m%d-%H\n",
+          "         time_slice_wait 10m\n",
+          "         utc\n",
+          "       </store>\n",
+          "      </match>\n",
+          "  - path: '/etc/dd-agent/conf.d/docker_daemon.yaml'\n",
+          "    permissions: '0644'\n",
+          "    content: |  \n",
+          "      init_config:\n\n",
+          "      instances:\n",
+          "          - url: 'unix://var/run/docker.sock'\n",
+          "            new_tag_names: true\n",
+          "  - path: '/etc/dd-agent/conf.d/disk.yaml.default'\n",
+          "    permissions: '0644'\n",
+          "    content: |\n",
+          "      init_config:\n\n",
+          "      instances:\n",
+          "         - use_mount: no\n",
+          "  - path: '/etc/dd-agent/conf.d/agent_metrics.yaml.default'\n",
+          "    permissions: '0644'\n",
+          "    content: |\n",
+          "      init_config:\n",
+          "          process_metrics:\n",
+          "              - name: get_memory_info\n",
+          "                type: gauge\n",
+          "                active: yes\n",
+          "              - name: get_io_counters\n",
+          "                type: rate\n",
+          "                active: yes\n",
+          "              - name: get_num_threads\n",
+          "                type: gauge\n",
+          "                active: yes\n",
+          "              - name: get_connections\n",
+          "                type: gauge\n",
+          "                active: no\n\n",
+          "      instances:\n",
+          "          [{}]\n"
+        ] ]
+        }
+        }
+      }
+    }
+  },
+     "Outputs":{  
+        "AwsEsAccessKeyParameter":{  
+           "Value":{  
+              "Ref":"AwsEsAccessKey"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsEsAccessKey" }
+           }
+        },
+        "AwsEsRegionParameter":{  
+           "Value":{  
+              "Ref":"AwsEsRegion"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsEsRegion" }
+           }
+        },
+        "AwsEsSecretKeyParameter":{  
+           "Value":{  
+              "Ref":"AwsEsSecretKey"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsEsSecretKey" }
+           }
+        },
+        "AwsEsUrlParameter":{  
+           "Value":{  
+              "Ref":"AwsEsUrl"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsEsUrl" }
+           }
+        },
+        "AwsS3BucketParameter":{  
+           "Value":{  
+              "Ref":"AwsS3Bucket"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsS3Bucket" }
+           }
+        },
+        "AwsS3DirPathParameter":{  
+           "Value":{  
+              "Ref":"AwsS3DirPath"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsS3DirPath" }
+           }
+        },
+        "AwsS3RegionParameter":{  
+           "Value":{  
+              "Ref":"AwsS3Region"
+           },
+           "Export":{ 
+              "Name" : {"Fn::Sub": "${AWS::StackName}-AwsS3Region" }
+           }
+        }
+     }
+  }
