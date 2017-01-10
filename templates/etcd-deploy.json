@@ -36,7 +36,7 @@
     "ETCDRoute53": {
       "Type": "AWS::Route53::HostedZone",
       "Properties": {
-        "Name": "example.com",
+        "Name": "example.com.",
         "VPCs": [
           {"VPCId": {"Fn::ImportValue" : {"Fn::Sub" : "service-VpcId"}},
           "VPCRegion": {"Ref" : "AWS::Region"}
@@ -52,9 +52,10 @@
       "Type" : "AWS::Route53::RecordSet",
       "Properties" : {
         "Type" : "SRV",
-        "HostedZoneId" : { "Ref" : "ETCDRoute53" },
-        "Name" : "*.example.com",
-        "ResourceRecords" : [ "10 5 2379 _etcd-client._tcp.example.com", "10 5 2380 _etcd-server._tcp.example.com"]
+        "HostedZoneId" : {"Ref": "ETCDRoute53"},
+        "Name" : "_etcd-server._tcp.example.com.",
+        "TTL" : "900",
+        "ResourceRecords" : [ "1 10 2380 example.com"]
       }
     },
     "ETCDSecurityGroup": {
