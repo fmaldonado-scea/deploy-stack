@@ -1,0 +1,188 @@
+#cloud-config
+
+coreos:
+  etcd2:
+    discovery: https://discovery.etcd.io/<token>
+    advertise-client-urls: http://$private_ipv4:2379
+    initial-advertise-peer-urls: http://$private_ipv4:2380
+    listen-client-urls: http://0.0.0.0:2379,http://0.0.0.0:4001
+    listen-peer-urls: http://$private_ipv4:2380
+  update:
+    reboot-strategy: off
+  units:
+    - name: etcd2.service
+      command: start  
+    - name: docker.service
+      command: start
+      enable: true
+    - name: fluentd.service
+      command: start
+      content: | 
+        [Unit]
+        Description=Fluentd log forwarding service
+        After=docker.service
+        Before=dd-agent.service
+        Requires=docker.service
+        [Service]
+        TimeoutStartSec=0
+        KillMode=none
+        EnvironmentFile=/etc/environment
+        ExecStartPre=-/usr/bin/docker kill fluentd
+        ExecStartPre=-/usr/bin/docker rm fluentd
+        ExecStartPre=/usr/bin/docker pull fluentd
+        ExecStart=/usr/bin/bash -c '/usr/bin/docker run \ 
+                           -p 514:514/udp \ 
+                           -p 24224:24224 \
+                           -v /etc/td-agent:/etc/td-agent \
+                           -v /var/log/fluentd:/var/log/td-agent/ \
+                           -e FLUENTD_CONF=td-agent.conf \
+                           $docker_registry/$pulltag"
+        ExecStop=/usr/bin/docker stop fluentd
+        Restart=always
+        [Install]
+        WantedBy=multi-user.target
+    - name: devnet.service
+      command: start
+      content: | 
+        [Unit]
+        Description=DevNet node
+        After=docker.service
+        Requires=docker.service
+        [Service]
+        TimeoutStartSec=0
+        KillMode=none
+        EnvironmentFile=/etc/environment
+        ExecStartPre=-/usr/bin/docker kill devnet
+        ExecStartPre=-/usr/bin/docker rm devnet
+        ExecStartPre=/usr/bin/docker pull $docker_registry/$pulltag
+        ExecStart=/usr/bin/bash -c "/usr/bin/docker run 
+                           --name devnet \
+                           --log-driver=fluentd \
+                           --log-opt fluentd-tag=docker.devnet \
+                           -p 80:80 \
+                           -p 443:443 \
+                           -h `hostname` \
+                           -v /etc/devnet:/etc/devnet \
+                           $docker_registry/$pulltag"
+        ExecStop=/usr/bin/docker stop devnet
+        Restart=always
+        [Install]
+        WantedBy=multi-user.target
+    - name: memcached.service
+      command: start
+      content: | 
+        [Unit]
+        Description=Memcached cluster
+        After=docker.service
+        Before=devnet.service
+        Requires=docker.service
+        [Service]
+        TimeoutStartSec=0
+        KillMode=none
+        EnvironmentFile=/etc/environment
+        ExecStartPre=-/usr/bin/docker kill memcached
+        ExecStartPre=-/usr/bin/docker rm memcached
+        ExecStartPre=/usr/bin/docker pull $docker_registry/$pulltag
+        ExecStart=/usr/bin/bash -c "/usr/bin/docker run \
+                           --name memcached \
+                           --log-driver=fluentd \
+                           --log-opt fluentd-tag=docker.memcached \
+                           -p 11211:11211 \
+                           -h `hostname` \
+                           -m 4mb \
+                           memcached:alpine"
+        ExecStop=/usr/bin/docker stop memcached
+        Restart=always
+        [Install]
+        WantedBy=multi-user.target
+    - name: postgres.service
+      command: start
+      content: | 
+        [Unit]
+        Description=PostgreSQL database
+        After=docker.service
+        Before=devnet.service
+        Requires=docker.service
+        [Service]
+        TimeoutStartSec=0
+        KillMode=none
+        EnvironmentFile=/etc/environment
+        ExecStartPre=-/usr/bin/docker kill devnet
+        ExecStartPre=-/usr/bin/docker rm devnet
+        ExecStartPre=/usr/bin/docker pull $docker_registry/$pulltag
+        ExecStart=/usr/bin/bash -c "/usr/bin/docker run \
+                           --name devnet \
+                           --log-driver=fluentd \
+                           --log-opt fluentd-tag=docker.postgres \
+                           -p 5432:5432 \
+                           -h `hostname` \
+                           -v /var/lib/postgresql/data/devnet_data:/var/lib/postgresql/data/devnet_data \
+                           -e POSTGRES_USER=
+                           -e POSTGRES_PASSWORD=
+                           -e POSTGRES_DB=
+                           -e POSTGRES_INITDB_ARGS=
+                           -e PGDATA=/var/lib/postgresql/data/devnet_data
+                           $docker_registry/$pulltag"
+        ExecStop=/usr/bin/docker stop devnet
+        Restart=always
+        [Install]
+        WantedBy=multi-user.target
+write_files:
+- path: "/etc/td-agent/td-agent.conf"
+  permissions: "0644"
+  content: |
+    <source>
+      @type syslog
+      format none
+      port 514
+      tag syslog
+    </source>
+    <source>
+      @type forward
+      port 24224
+      tag fluentd
+    </source>
+    <match docker.**>\n",
+      @type forward\n",
+      heartbeat_type tcp\n",
+      <server>\n",
+        name fluentd
+        host $private_ipv4
+        port 24224
+      </server>\
+    </match>\n",
+    <match docker.**>
+      @type copy
+     <store>
+       @type "aws-elasticsearch-service"
+       logstash_format true
+       type_name "syslog_log"
+       include_tag_key true
+       tag_key "@syslog"
+       flush_interval "5s"
+      <endpoint>
+        url ""
+        region ""
+        access_key_id ""
+        secret_access_key ""
+      </endpoint>
+     </store>
+     <store>
+       @type s3
+       aws_key_id ""
+       aws_sec_key ""
+       s3_bucket ""
+       s3_region ""
+       s3_object_key_format %{path}%{time_slice}_%{index}.%{file_extension}
+       path ""
+       buffer_path /var/log/td-agent/s3
+       store_as json
+       time_slice_format %Y%m%d-%H
+       time_slice_wait 10m
+       utc
+     </store>
+    </match>
+users:
+  - name: postgres
+    groups:
+      - docker

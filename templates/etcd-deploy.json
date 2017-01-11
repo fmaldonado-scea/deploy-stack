@@ -48,14 +48,24 @@
         ]
       }
     },
-    "ETCDDNSRecord": {
+    "ETCDServerDNSRecord": {
       "Type" : "AWS::Route53::RecordSet",
       "Properties" : {
         "Type" : "SRV",
         "HostedZoneId" : {"Ref": "ETCDRoute53"},
         "Name" : "_etcd-server._tcp.example.com.",
         "TTL" : "900",
-        "ResourceRecords" : [ "1 10 2380 example.com"]
+        "ResourceRecords" : [ "1 10 2380 example.com", "1 10 2379 example.com"]
+      }
+    },
+    "ETCDClientDNSRecord": {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "Type" : "SRV",
+        "HostedZoneId" : {"Ref": "ETCDRoute53"},
+        "Name" : "_etcd-client._tcp.example.com.",
+        "TTL" : "900",
+        "ResourceRecords" : ["1 10 2379 example.com"]
       }
     },
     "ETCDSecurityGroup": {
@@ -119,7 +129,7 @@
             "#cloud-config\n\n",
             "coreos:\n",
             "  etcd2:\n",
-            "    discovery: srv example.com\n",
+            "    discovery-srv: example.com\n",
             "    advertise-client-urls: http://$private_ipv4:2379\n",
             "    initial-advertise-peer-urls: http://$private_ipv4:2380\n",
             "    listen-client-urls: http://0.0.0.0:2379,http://0.0.0.0:4001\n",

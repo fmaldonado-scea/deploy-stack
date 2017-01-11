@@ -1,7 +1,7 @@
 {
   "AWSTemplateFormatVersion" : "2010-09-09",
 
-  "Description" : "Devnet cluster deployment",
+  "Description" : "Postgres cluster deployment",
 
   "Mappings" : {
     "CoreOSRegionMap" : {
@@ -16,7 +16,7 @@
       "Description" : "The name of the environment.",
       "Type" : "String"
     },
-    "DevnetClusterSize": {
+    "PostgresClusterSize": {
       "Default": "2",
       "MinValue": "2",
       "MaxValue": "2",
@@ -29,10 +29,10 @@
     }
   },
   "Resources" : {
-    "DevnetSecurityGroup": {
+    "PostgresSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "Devnet SecurityGroup",
+        "GroupDescription": "Postgres SecurityGroup",
         "VpcId" : { "Ref" : "VpcId" },
         "SecurityGroupIngress": [
           {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroupId"}},
@@ -41,34 +41,34 @@
         ],
         "Tags" : [
           {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}},
-          { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"devnet-allow"]]}}
+          { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"postgres-allow"]]}}
         ]
       }
     },
-    "DevnetAutoScale": {
+    "PostgresAutoScale": {
       "Type": "AWS::AutoScaling::AutoScalingGroup",
       "Properties": {
         "VPCZoneIdentifier": [{"Ref": "AppSubnetA"}, {"Ref": "AppSubnetB"}, {"Ref" : "AppSubnetC"}],
-        "LaunchConfigurationName": {"Ref": "DevnetLaunchConfig"},
+        "LaunchConfigurationName": {"Ref": "PostgresLaunchConfig"},
         "MinSize": "2",
         "MaxSize": "2",
-        "DesiredCapacity": {"Ref": "DevnetClusterSize"},
+        "DesiredCapacity": {"Ref": "PostgresClusterSize"},
         "Tags": [
           {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}, "PropagateAtLaunch": "true"},
-          {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"devnet"]]}, "PropagateAtLaunch": "true"}
+          {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"postrgres"]]}, "PropagateAtLaunch": "true"}
         ]
       }
     },
-    "DevnetLaunchConfig": {
+    "PostgresLaunchConfig": {
       "Type": "AWS::AutoScaling::LaunchConfiguration",
       "Properties": {
         "BlockDeviceMappings": [{
           "DeviceName": "/dev/xvda",
           "Ebs" : {"VolumeSize": "20"}}],
         "ImageId" : { "Fn::FindInMap" : [ "CoreOSRegionMap", { "Ref" : "AWS::Region" }, "AMI" ]},
-        "InstanceType": {"Ref": "DevnetInstanceType"},
+        "InstanceType": {"Ref": "PostgresInstanceType"},
         "KeyName": {"Ref": "KeyPair"},
-        "SecurityGroups": [{"Ref": "DevnetSecurityGroup"}],
+        "SecurityGroups": [{"Ref": "PostgresSecurityGroup"}],
         "UserData" : { "Fn::Base64":
         { "Fn::Join": [ "", [
           "#cloud-config\n\n",

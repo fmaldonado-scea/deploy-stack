@@ -878,6 +878,69 @@
             ]
          }
       },
+      "DevnetSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Devnet SecurityGroup",
+          "VpcId" : { "Ref" : "EnvironmentVPC" },
+          "SecurityGroupIngress": [
+            {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroup"}},
+            {"IpProtocol": "icmp", "FromPort": "-1", "ToPort": "-1", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroup"}}
+          ],
+          "Tags" : [
+            {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}},
+            { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"devnet-allow"]]}}
+          ]
+        }
+      },
+      "ETCDSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Etcd SecurityGroup",
+          "VpcId" : { "Ref" : "EnvironmentVPC" },
+          "SecurityGroupIngress": [
+            {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref": "AdminSecurityGroup"}},
+            {"IpProtocol": "tcp", "FromPort": "2379", "ToPort": "2379", "CidrIp": {"Fn::Join" : [ ".", [{ "Ref": "VpcCidrBlock"}, "0/24"]]}},
+            {"IpProtocol": "icmp", "FromPort": "-1", "ToPort": "-1", "SourceSecurityGroupId": {"Ref": "AdminSecurityGroup"}}
+          ],
+          "Tags" : [
+            { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{"Ref": "EnvironmentName"},"etcd-allow"]]}},
+            { "Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}}
+          ]
+        }
+      },
+      "FluentdSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Fluentd SecurityGroup",
+          "VpcId" : { "Ref" : "EnvironmentVPC" },
+          "SecurityGroupIngress": [
+            {"IpProtocol": "tcp", "FromPort": "514", "ToPort": "514", "CidrIp": {"Fn::Join" : [ ".", [{ "Ref": "VpcCidrBlock"}, "0/24"]]}},
+            {"IpProtocol": "udp", "FromPort": "514", "ToPort": "514", "CidrIp": {"Fn::Join" : [ ".", [{ "Ref": "VpcCidrBlock"}, "0/24"]]}},
+            {"IpProtocol": "tcp", "FromPort": "24224", "ToPort": "24224", "CidrIp": {"Fn::Join" : [ ".", [{ "Ref": "VpcCidrBlock"}, "0/24"]]}},
+            {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref": "AdminSecurityGroup"}}
+          ],
+          "Tags" : [
+            { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{"Ref" : "EnvironmentName"},"fluentd-allow"]]}},
+            { "Key" : "Environment", "Value" : { "Ref": "EnvironmentName"}}
+          ]
+        }
+      },
+      "MemcachedSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Memcached SecurityGroup",
+          "VpcId" : { "Ref" : "EnvironmentVPC" },
+          "SecurityGroupIngress": [
+            {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroup"}},
+            {"IpProtocol": "icmp", "FromPort": "-1", "ToPort": "-1", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroup"}}
+          ],
+          "Tags" : [
+            {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}},
+            { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"memcached-allow"]]}}
+          ]
+        }
+      },
       "NATSecurityGroup":{  
          "Properties":{  
             "GroupDescription":"Security group for NAT host.",
@@ -943,6 +1006,22 @@
             ]
          },
          "Type":"AWS::EC2::SecurityGroup"
+      },
+      "PostgresSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription": "Postgres SecurityGroup",
+          "VpcId" : { "Ref" : "EnvironmentVPC" },
+          "SecurityGroupIngress": [
+            {"IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroup"}},
+            {"IpProtocol": "tcp", "FromPort": "24224", "ToPort": "24224", "SourceSecurityGroupId": {"Ref" : "FluentdSecurityGroup"}},
+            {"IpProtocol": "icmp", "FromPort": "-1", "ToPort": "-1", "SourceSecurityGroupId": {"Ref" : "AdminSecurityGroup"}}
+          ],
+          "Tags" : [
+            {"Key" : "Environment", "Value" : {"Ref": "EnvironmentName"}},
+            { "Key" : "Name", "Value" : {"Fn::Join" : [ "-", [{ "Ref": "EnvironmentName"},"postgres-allow"]]}}
+          ]
+        }
       },
       "NatDNSIngress":{  
          "Properties":{  
@@ -1097,6 +1176,21 @@
             "ToPort":"24224"
          },
          "Type":"AWS::EC2::SecurityGroupIngress"
+      },
+      "ETCDRoute53": {
+        "Type": "AWS::Route53::HostedZone",
+        "Properties": {
+          "Name": "example.com.",
+          "VPCs": [
+            {"VPCId": {"Ref": "EnvironmentVPC"},
+            "VPCRegion": {"Ref" : "AWS::Region"}
+            }
+          ],
+          "HostedZoneTags" : [
+            {"Key": "Environment", "Value": {"Ref": "EnvironmentName"}},
+            {"Key": "Name", "Value": {"Fn::Join" : [ "-", [{"Ref": "EnvironmentName"},"etcd-dns"]]}}
+          ]
+        }
       },
       "BastionHost":{  
          "Type":"AWS::EC2::Instance",
@@ -1320,6 +1414,14 @@
             "Name" : {"Fn::Sub": "${AWS::StackName}-DBSubnetC" }
          }
       },
+      "DevnetSecurityGroupParameter":{  
+         "Value":{  
+            "Ref":"DevnetSecurityGroup"
+         },
+         "Export":{ 
+            "Name" : {"Fn::Sub": "${AWS::StackName}-DevnetSecurityGroup" }
+         }
+      },
       "Environment":{  
          "Value":{  
             "Ref":"EnvironmentName"
@@ -1328,12 +1430,36 @@
             "Name" : {"Fn::Sub": "${AWS::StackName}-Environment" }
          }
       },
-      "NATSecurityGroupParameter":{  
+      "ETCDRoute53Parameter":{  
          "Value":{  
-            "Ref":"NATSecurityGroup"
+            "Ref":"ETCDRoute53"
          },
          "Export":{ 
-            "Name" : {"Fn::Sub": "${AWS::StackName}-NATSecurityGroup" }
+            "Name" : {"Fn::Sub": "${AWS::StackName}-ETCDRoute53" }
+         }
+      },
+      "ETCDSecurityGroupParameter":{  
+         "Value":{  
+            "Ref":"ETCDSecurityGroup"
+         },
+         "Export":{ 
+            "Name" : {"Fn::Sub": "${AWS::StackName}-ETCDSecurityGroup" }
+         }
+      },
+      "FluentdSecurityGroupParameter":{  
+         "Value":{  
+            "Ref":"FluentdSecurityGroup"
+         },
+         "Export":{ 
+            "Name" : {"Fn::Sub": "${AWS::StackName}-FluentdSecurityGroup" }
+         }
+      },
+      "MemcachedSecurityGroupParameter":{  
+         "Value":{  
+            "Ref":"MemcachedSecurityGroup"
+         },
+         "Export":{ 
+            "Name" : {"Fn::Sub": "${AWS::StackName}-MemcachedSecurityGroup" }
          }
       },
       "NATInstanceIpParameter":{  
@@ -1342,6 +1468,22 @@
          },
          "Export":{ 
             "Name" : {"Fn::Sub": "${AWS::StackName}-NatIp" }
+         }
+      },
+      "NATSecurityGroupParameter":{  
+         "Value":{  
+            "Ref":"MemcachedSecurityGroup"
+         },
+         "Export":{ 
+            "Name" : {"Fn::Sub": "${AWS::StackName}-NATSecurityGroup" }
+         }
+      },
+      "PostresSecurityGroupParameter":{  
+         "Value":{  
+            "Ref":"PostgresSecurityGroup"
+         },
+         "Export":{ 
+            "Name" : {"Fn::Sub": "${AWS::StackName}-PostgresSecurityGroup" }
          }
       },
       "VpcCidrRangeParameter":{  
