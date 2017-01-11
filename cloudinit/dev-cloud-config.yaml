@@ -19,7 +19,7 @@ coreos:
       command: start
       content: | 
         [Unit]
-        Description=Fluentd log forwarding service
+        Description=Fluentd log service
         After=docker.service
         Before=dd-agent.service
         Requires=docker.service
