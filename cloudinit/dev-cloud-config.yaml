@@ -21,7 +21,6 @@ coreos:
         [Unit]
         Description=Fluentd log service
         After=docker.service
-        Before=dd-agent.service
         Requires=docker.service
         [Service]
         TimeoutStartSec=0
@@ -29,14 +28,15 @@ coreos:
         EnvironmentFile=/etc/environment
         ExecStartPre=-/usr/bin/docker kill fluentd
         ExecStartPre=-/usr/bin/docker rm fluentd
-        ExecStartPre=/usr/bin/docker pull fluentd
+        ExecStartPre=/usr/bin/docker pull $docker_registry/fluentd:$pulltag
         ExecStart=/usr/bin/bash -c '/usr/bin/docker run \ 
+                           -h `hostname` \
                            -p 514:514/udp \ 
                            -p 24224:24224 \
                            -v /etc/td-agent:/etc/td-agent \
                            -v /var/log/fluentd:/var/log/td-agent/ \
                            -e FLUENTD_CONF=td-agent.conf \
-                           $docker_registry/$pulltag"
+                           $docker_registry/fluentd:$pulltag"
         ExecStop=/usr/bin/docker stop fluentd
         Restart=always
         [Install]
@@ -54,16 +54,16 @@ coreos:
         EnvironmentFile=/etc/environment
         ExecStartPre=-/usr/bin/docker kill devnet
         ExecStartPre=-/usr/bin/docker rm devnet
-        ExecStartPre=/usr/bin/docker pull $docker_registry/$pulltag
+        ExecStartPre=/usr/bin/docker pull $docker_registry/devnet:$pulltag
         ExecStart=/usr/bin/bash -c "/usr/bin/docker run 
                            --name devnet \
                            --log-driver=fluentd \
                            --log-opt fluentd-tag=docker.devnet \
+                           -h `hostname` \
                            -p 80:80 \
                            -p 443:443 \
-                           -h `hostname` \
                            -v /etc/devnet:/etc/devnet \
-                           $docker_registry/$pulltag"
+                           $docker_registry/devnet:$pulltag"
         ExecStop=/usr/bin/docker stop devnet
         Restart=always
         [Install]
@@ -82,14 +82,15 @@ coreos:
         EnvironmentFile=/etc/environment
         ExecStartPre=-/usr/bin/docker kill memcached
         ExecStartPre=-/usr/bin/docker rm memcached
-        ExecStartPre=/usr/bin/docker pull $docker_registry/$pulltag
+        ExecStartPre=/usr/bin/docker pull memcached:alpine
         ExecStart=/usr/bin/bash -c "/usr/bin/docker run \
                            --name memcached \
                            --log-driver=fluentd \
                            --log-opt fluentd-tag=docker.memcached \
-                           -p 11211:11211 \
                            -h `hostname` \
-                           -m 4mb \
+                           -p 11211:11211 \
+                           -m 128mb \
+                           -c 1024 \
                            memcached:alpine"
         ExecStop=/usr/bin/docker stop memcached
         Restart=always
@@ -107,23 +108,23 @@ coreos:
         TimeoutStartSec=0
         KillMode=none
         EnvironmentFile=/etc/environment
-        ExecStartPre=-/usr/bin/docker kill devnet
-        ExecStartPre=-/usr/bin/docker rm devnet
-        ExecStartPre=/usr/bin/docker pull $docker_registry/$pulltag
+        ExecStartPre=-/usr/bin/docker kill postgres
+        ExecStartPre=-/usr/bin/docker rm postgres
+        ExecStartPre=/usr/bin/docker pull $docker_registry/postgres:$pulltag
         ExecStart=/usr/bin/bash -c "/usr/bin/docker run \
-                           --name devnet \
+                           --name postgres \
                            --log-driver=fluentd \
                            --log-opt fluentd-tag=docker.postgres \
-                           -p 5432:5432 \
                            -h `hostname` \
+                           -p 5432:5432 \
                            -v /var/lib/postgresql/data/devnet_data:/var/lib/postgresql/data/devnet_data \
-                           -e POSTGRES_USER=
-                           -e POSTGRES_PASSWORD=
-                           -e POSTGRES_DB=
-                           -e POSTGRES_INITDB_ARGS=
-                           -e PGDATA=/var/lib/postgresql/data/devnet_data
-                           $docker_registry/$pulltag"
-        ExecStop=/usr/bin/docker stop devnet
+                           -e POSTGRES_USER= \
+                           -e POSTGRES_PASSWORD= \
+                           -e POSTGRES_DB= \
+                           -e POSTGRES_INITDB_ARGS= \
+                           -e PGDATA=/var/lib/postgresql/data/devnet_data \
+                           $docker_registry/postgres:$pulltag" 
+        ExecStop=/usr/bin/docker stop postgres
         Restart=always
         [Install]
         WantedBy=multi-user.target
@@ -142,15 +143,15 @@ write_files:
       port 24224
       tag fluentd
     </source>
-    <match docker.**>\n",
-      @type forward\n",
-      heartbeat_type tcp\n",
-      <server>\n",
+    <match docker.**>
+      @type forward
+      heartbeat_type tcp
+      <server>
         name fluentd
         host $private_ipv4
         port 24224
-      </server>\
-    </match>\n",
+      </server>
+    </match>
     <match docker.**>
       @type copy
      <store>
@@ -158,23 +159,23 @@ write_files:
        logstash_format true
        type_name "syslog_log"
        include_tag_key true
-       tag_key "@syslog"
+       tag_key "@dev"
        flush_interval "5s"
       <endpoint>
-        url ""
-        region ""
-        access_key_id ""
-        secret_access_key ""
+        url $aws_es_url
+        region $aws_es_region
+        access_key_id $aws_es_access
+        secret_access_key $aws_es_secret
       </endpoint>
      </store>
      <store>
        @type s3
-       aws_key_id ""
-       aws_sec_key ""
-       s3_bucket ""
-       s3_region ""
+       aws_key_id $aws_s3_access
+       aws_sec_key $aws_s3_secret
+       s3_bucket $aws_s3_bucket
+       s3_region $aws_s3_region
        s3_object_key_format %{path}%{time_slice}_%{index}.%{file_extension}
-       path ""
+       path $aws_s3_path
        buffer_path /var/log/td-agent/s3
        store_as json
        time_slice_format %Y%m%d-%H
@@ -182,6 +183,9 @@ write_files:
        utc
      </store>
     </match>
+- path: "/etc/environment"
+  permissions: "0644"
+  content: |
 users:
   - name: postgres
     groups:
